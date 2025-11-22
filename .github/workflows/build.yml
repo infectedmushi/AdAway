@@ -1,0 +1,95 @@
+name: Build AdAway APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [published]
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Build debug APK (for testing)
+      run: ./gradlew assembleDebug
+
+    - name: Build release APK
+      run: |
+        # Create a temporary keystore for signing
+        keytool -genkey -v \
+          -keystore temporary.keystore \
+          -alias adaway \
+          -keyalg RSA \
+          -keysize 2048 \
+          -validity 10000 \
+          -storepass password123 \
+          -keypass password123 \
+          -dname "CN=AdAway, OU=Android, O=AdAway, L=Unknown, ST=Unknown, C=US"
+        
+        # Build release APK with proper signing
+        ./gradlew assembleRelease -Pandroid.injected.signing.store.file=$(pwd)/temporary.keystore \
+                                 -Pandroid.injected.signing.store.password=password123 \
+                                 -Pandroid.injected.signing.key.alias=adaway \
+                                 -Pandroid.injected.signing.key.password=password123
+
+    - name: Upload debug APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: adaway-debug
+        path: app/build/outputs/apk/debug/*.apk
+        retention-days: 7
+
+    - name: Upload release APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: adaway-release
+        path: app/build/outputs/apk/release/*.apk
+        retention-days: 7
+
+    - name: Upload build reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: build-reports
+        path: |
+          app/build/reports/
+          build/reports/
+        retention-days: 7
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'release'
+    
+    steps:
+    - name: Download release APK
+      uses: actions/download-artifact@v4
+      with:
+        name: adaway-release
+        path: dist/
+
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/*.apk
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
