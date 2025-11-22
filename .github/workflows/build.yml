@@ -1,4 +1,4 @@
-name: Build AdAway APK
+name: Build Signed AdAway APK
 
 on:
   push:
@@ -7,7 +7,13 @@ on:
     branches: [ main, master ]
   release:
     types: [published]
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
+
+env:
+  SIGNING_STORE_LOCATION: keystore.jks
+  SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+  SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+  SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
 
 jobs:
   build:
@@ -26,54 +32,55 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
-
-    - name: Build debug APK (for testing)
-      run: ./gradlew assembleDebug
-
-    - name: Build release APK
+    - name: Create signing keystore
       run: |
-        # Create a temporary keystore for signing
+        # Generate a new keystore for signing
         keytool -genkey -v \
-          -keystore temporary.keystore \
-          -alias adaway \
+          -keystore $SIGNING_STORE_LOCATION \
+          -alias $SIGNING_KEY_ALIAS \
           -keyalg RSA \
           -keysize 2048 \
           -validity 10000 \
-          -storepass password123 \
-          -keypass password123 \
+          -storepass $SIGNING_STORE_PASSWORD \
+          -keypass $SIGNING_KEY_PASSWORD \
           -dname "CN=AdAway, OU=Android, O=AdAway, L=Unknown, ST=Unknown, C=US"
-        
-        # Build release APK with proper signing
-        ./gradlew assembleRelease -Pandroid.injected.signing.store.file=$(pwd)/temporary.keystore \
-                                 -Pandroid.injected.signing.store.password=password123 \
-                                 -Pandroid.injected.signing.key.alias=adaway \
-                                 -Pandroid.injected.signing.key.password=password123
 
-    - name: Upload debug APK artifact
+    - name: Create gradle.properties with signing config
+      run: |
+        cat > gradle.properties << EOF
+        signingStoreLocation=$SIGNING_STORE_LOCATION
+        signingStorePassword=$SIGNING_STORE_PASSWORD
+        signingKeyAlias=$SIGNING_KEY_ALIAS
+        signingKeyPassword=$SIGNING_KEY_PASSWORD
+        EOF
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Build with Gradle
+      run: |
+        ./gradlew assembleDebug assembleRelease
+
+    - name: Upload debug APK
       uses: actions/upload-artifact@v4
       with:
         name: adaway-debug
         path: app/build/outputs/apk/debug/*.apk
-        retention-days: 7
+        retention-days: 30
 
-    - name: Upload release APK artifact
+    - name: Upload release APK
       uses: actions/upload-artifact@v4
       with:
         name: adaway-release
         path: app/build/outputs/apk/release/*.apk
-        retention-days: 7
+        retention-days: 30
 
-    - name: Upload build reports
+    - name: Upload mapping file
       uses: actions/upload-artifact@v4
-      if: always()
       with:
-        name: build-reports
-        path: |
-          app/build/reports/
-          build/reports/
-        retention-days: 7
+        name: mapping-files
+        path: app/build/outputs/mapping/release/
+        retention-days: 30
 
   release:
     runs-on: ubuntu-latest
@@ -87,7 +94,7 @@ jobs:
         name: adaway-release
         path: dist/
 
-    - name: Upload release assets
+    - name: Upload to GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: dist/*.apk
